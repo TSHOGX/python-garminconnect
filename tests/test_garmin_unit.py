@@ -526,6 +526,43 @@ class TestResponseHandling:
 class TestMenstrualCycleApi:
     """Verify menstrual-cycle endpoint wrappers and write payloads."""
 
+    def test_get_menstrual_data_for_date_accepts_today_date(
+        self, garmin: garminconnect.Garmin
+    ):
+        with patch.object(garmin, "connectapi", return_value={}) as mock:
+            garmin.get_menstrual_data_for_date(
+                "2026-05-15", today_date="2026-05-15"
+            )
+
+        mock.assert_called_once_with(
+            "/periodichealth-service/menstrualcycle/dayview/2026-05-15",
+            params={"todayDate": "2026-05-15"},
+        )
+
+    def test_get_menstrual_summary_builds_url(
+        self, garmin: garminconnect.Garmin
+    ):
+        payload: dict[str, Any] = {"periodLength": 5}
+        with patch.object(garmin, "connectapi", return_value=payload) as mock:
+            result = garmin.get_menstrual_summary("2026-05-15")
+
+        mock.assert_called_once_with(
+            "/periodichealth-service/menstrualcycle/summary/2026-05-15"
+        )
+        assert result == payload
+
+    def test_get_menstrual_last_confirmed_builds_url(
+        self, garmin: garminconnect.Garmin
+    ):
+        payload: dict[str, Any] = {"periodStartDate": "2026-05-01"}
+        with patch.object(garmin, "connectapi", return_value=payload) as mock:
+            result = garmin.get_menstrual_last_confirmed("2026-05-15")
+
+        mock.assert_called_once_with(
+            "/periodichealth-service/menstrualcycle/lastconfirmed/2026-05-15"
+        )
+        assert result == payload
+
     def test_get_menstrual_reports_builds_url_and_params(
         self, garmin: garminconnect.Garmin
     ):
@@ -569,6 +606,19 @@ class TestMenstrualCycleApi:
 
         mock.assert_called_once_with(
             "/periodichealth-service/menstrualcycle/pregnancysnapshot/all"
+        )
+        assert result == payload
+
+    def test_get_pregnancy_weight_goals_builds_url(
+        self, garmin: garminconnect.Garmin
+    ):
+        payload: list[dict[str, Any]] = []
+        with patch.object(garmin, "connectapi", return_value=payload) as mock:
+            result = garmin.get_pregnancy_weight_goals("2026-05-01", "2026-05-31")
+
+        mock.assert_called_once_with(
+            "/periodichealth-service/menstrualcycle/pregnancy/weightgoals/"
+            "2026-05-01/2026-05-31"
         )
         assert result == payload
 
@@ -650,3 +700,116 @@ class TestMenstrualCycleApi:
             garmin.update_menstrual_daily_log(
                 "2026-05-15", discharge=["NO_DISCHARGE", "LIGHT"]
             )
+
+    def test_update_menstrual_calendar_posts_payload(
+        self, garmin: garminconnect.Garmin
+    ):
+        with patch.object(garmin.client, "post", return_value={}) as mock:
+            garmin.update_menstrual_calendar(
+                "2026-05-01",
+                "2026-05-31",
+                [["2026-05-01", "2026-05-02"], []],
+                today_calendar_date="2026-05-15",
+                user_profile_pk=12345,
+                report_timestamp="2026-05-15T02:00:00.000",
+            )
+
+        mock.assert_called_once_with(
+            "connectapi",
+            "/periodichealth-service/menstrualcycle/calendarupdates",
+            json={
+                "userProfilePk": 12345,
+                "todayCalendarDate": "2026-05-15",
+                "startDate": "2026-05-01",
+                "endDate": "2026-05-31",
+                "reportTimestamp": "2026-05-15T02:00:00.000",
+                "cycleDatesLists": [["2026-05-01", "2026-05-02"], []],
+                "futureEditsByFE": True,
+            },
+            api=True,
+        )
+
+    def test_update_menstrual_calendar_allows_empty_cycle_dates_lists(
+        self, garmin: garminconnect.Garmin
+    ):
+        with patch.object(garmin.client, "post", return_value={}) as mock:
+            garmin.update_menstrual_calendar(
+                "2026-05-01",
+                "2026-05-31",
+                [],
+                future_edits_by_fe=None,
+            )
+
+        payload = mock.call_args.kwargs["json"]
+        assert payload == {
+            "startDate": "2026-05-01",
+            "endDate": "2026-05-31",
+            "cycleDatesLists": [],
+        }
+
+    def test_update_menstrual_calendar_rejects_invalid_cycle_dates_lists(
+        self, garmin: garminconnect.Garmin
+    ):
+        with pytest.raises(ValueError, match="cycle_dates_lists\\[0\\]\\[0\\]"):
+            garmin.update_menstrual_calendar(
+                "2026-05-01", "2026-05-31", [["bad-date"]]
+            )
+
+    def test_init_menstrual_cycle_setup_posts_payload(
+        self, garmin: garminconnect.Garmin
+    ):
+        with patch.object(garmin.client, "post", return_value={}) as mock:
+            garmin.init_menstrual_cycle_setup(
+                "2026-05-01",
+                "5",
+                "28",
+                user_profile_pk="12345",
+                report_timestamp="2026-05-15T02:00:00.000",
+            )
+
+        mock.assert_called_once_with(
+            "connectapi",
+            "/periodichealth-service/menstrualcycle/initCycleSetup",
+            json={
+                "userProfilePk": "12345",
+                "periodStartDate": "2026-05-01",
+                "periodLength": 5,
+                "cycleLength": 28,
+                "reportTimestamp": "2026-05-15T02:00:00.000",
+            },
+            api=True,
+        )
+
+    def test_confirm_menstrual_period_start_posts_raw_payload(
+        self, garmin: garminconnect.Garmin
+    ):
+        with patch.object(garmin.client, "post", return_value={}) as mock:
+            garmin.confirm_menstrual_period_start(
+                "2026-05-01",
+                {"cycleLength": 28, "periodStartDate": "2026-04-30"},
+            )
+
+        mock.assert_called_once_with(
+            "connectapi",
+            "/periodichealth-service/menstrualcycle/2026-05-01",
+            json={"cycleLength": 28, "periodStartDate": "2026-05-01"},
+            api=True,
+        )
+
+    def test_update_menstrual_settings_puts_nested_settings(
+        self, garmin: garminconnect.Garmin
+    ):
+        settings = {
+            "menstrualCycleType": "REGULAR",
+            "flowTracking": True,
+            "periodPrediction": True,
+        }
+        with patch.object(garmin.client, "put", return_value={}) as mock:
+            garmin.update_menstrual_settings(settings, user_settings_id=12345)
+
+        mock.assert_called_once_with(
+            "connectapi",
+            "/userprofile-service/userprofile/user-settings",
+            json={"userMenstrualCycleSettings": settings, "id": 12345},
+            api=True,
+        )

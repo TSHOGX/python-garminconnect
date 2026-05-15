@@ -189,6 +189,43 @@ def _validate_optional_enum_list(
     return result
 
 
+def _validate_date_list(values: list[str], param_name: str) -> list[str]:
+    """Validate a list of YYYY-MM-DD date strings."""
+    if not isinstance(values, list):
+        raise ValueError(f"{param_name} must be a list")
+    return [
+        _validate_date_format(value, f"{param_name}[{index}]")
+        for index, value in enumerate(values)
+    ]
+
+
+def _validate_date_group_list(
+    values: list[list[str]], param_name: str
+) -> list[list[str]]:
+    """Validate a list of date-string lists."""
+    if not isinstance(values, list):
+        raise ValueError(f"{param_name} must be a list")
+
+    result = []
+    for index, value in enumerate(values):
+        if not isinstance(value, list):
+            raise ValueError(f"{param_name}[{index}] must be a list")
+        result.append(_validate_date_list(value, f"{param_name}[{index}]"))
+    return result
+
+
+def _clean_optional_payload(
+    payload: dict[str, Any], keep_empty: set[str] | None = None
+) -> dict[str, Any]:
+    """Remove null and empty-list fields from a Garmin payload."""
+    keep_empty = keep_empty or set()
+    return {
+        key: value
+        for key, value in payload.items()
+        if value is not None and (key in keep_empty or value != [])
+    }
+
+
 def _fmt_ts(dt: datetime) -> str:
     # Use ms precision to match server expectations
     return dt.replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
@@ -500,14 +537,29 @@ class Garmin:
         self.garmin_connect_menstrual_dayview_url = (
             "/periodichealth-service/menstrualcycle/dayview"
         )
+        self.garmin_connect_menstrual_summary_url = (
+            "/periodichealth-service/menstrualcycle/summary"
+        )
+        self.garmin_connect_menstrual_last_confirmed_url = (
+            "/periodichealth-service/menstrualcycle/lastconfirmed"
+        )
         self.garmin_connect_menstrual_dailylog_url = (
             "/periodichealth-service/menstrualcycle/dailylog"
+        )
+        self.garmin_connect_menstrual_calendar_updates_url = (
+            "/periodichealth-service/menstrualcycle/calendarupdates"
+        )
+        self.garmin_connect_menstrual_init_cycle_setup_url = (
+            "/periodichealth-service/menstrualcycle/initCycleSetup"
         )
         self.garmin_connect_menstrual_reports_url = (
             "/periodichealth-service/reports/menstrualcycle"
         )
         self.garmin_connect_pregnancy_snapshot_url = (
             "/periodichealth-service/menstrualcycle/pregnancysnapshot"
+        )
+        self.garmin_connect_pregnancy_weight_goals_url = (
+            "/periodichealth-service/menstrualcycle/pregnancy/weightgoals"
         )
         self.garmin_connect_goals_url = "/goal-service/goal/goals"
 
@@ -3020,12 +3072,19 @@ class Garmin:
         logger.debug("Unscheduling workout %s", scheduled_workout_id)
         return self.client.delete("connectapi", url, api=True)
 
-    def get_menstrual_data_for_date(self, fordate: str) -> dict[str, Any]:
+    def get_menstrual_data_for_date(
+        self, fordate: str, today_date: str | None = None
+    ) -> dict[str, Any]:
         """Return menstrual data for date."""
         fordate = _validate_date_format(fordate, "fordate")
+        params = {}
+        if today_date is not None:
+            params["todayDate"] = _validate_date_format(today_date, "today_date")
         url = f"{self.garmin_connect_menstrual_dayview_url}/{fordate}"
         logger.debug("Requesting menstrual data for date %s", fordate)
 
+        if params:
+            return self.connectapi(url, params=params)
         return self.connectapi(url)
 
     def get_menstrual_calendar_data(
@@ -3038,6 +3097,22 @@ class Garmin:
         logger.debug(
             "Requesting menstrual data for dates %s through %s", startdate, enddate
         )
+
+        return self.connectapi(url)
+
+    def get_menstrual_summary(self, date: str) -> dict[str, Any]:
+        """Return menstrual cycle summary for date."""
+        date = _validate_date_format(date, "date")
+        url = f"{self.garmin_connect_menstrual_summary_url}/{date}"
+        logger.debug("Requesting menstrual summary for date %s", date)
+
+        return self.connectapi(url)
+
+    def get_menstrual_last_confirmed(self, date: str) -> dict[str, Any]:
+        """Return the last confirmed menstrual cycle data for date."""
+        date = _validate_date_format(date, "date")
+        url = f"{self.garmin_connect_menstrual_last_confirmed_url}/{date}"
+        logger.debug("Requesting last confirmed menstrual data for date %s", date)
 
         return self.connectapi(url)
 
@@ -3133,16 +3208,141 @@ class Garmin:
             "userProfilePk": user_profile_pk,
             "reportTimestamp": report_timestamp,
         }
-        payload = {
-            key: value
-            for key, value in payload.items()
-            if value is not None and (key == "notes" or value != [])
-        }
+        payload = _clean_optional_payload(payload, keep_empty={"notes"})
 
         url = f"{self.garmin_connect_menstrual_dailylog_url}/{calendar_date}"
         logger.debug("Updating menstrual daily log for %s", calendar_date)
 
         return self.client.post("connectapi", url, json=payload, api=True)
+
+    def update_menstrual_calendar(
+        self,
+        startdate: str,
+        enddate: str,
+        cycle_dates_lists: list[list[str]],
+        *,
+        today_calendar_date: str | None = None,
+        user_profile_pk: int | str | None = None,
+        report_timestamp: str | None = None,
+        future_edits_by_fe: bool | None = True,
+    ) -> dict[str, Any]:
+        """Update menstrual period dates on the calendar."""
+        startdate = _validate_date_format(startdate, "startdate")
+        enddate = _validate_date_format(enddate, "enddate")
+        cycle_dates_lists = _validate_date_group_list(
+            cycle_dates_lists, "cycle_dates_lists"
+        )
+        if today_calendar_date is not None:
+            today_calendar_date = _validate_date_format(
+                today_calendar_date, "today_calendar_date"
+            )
+        if user_profile_pk is not None and not isinstance(user_profile_pk, int | str):
+            raise ValueError("user_profile_pk must be an integer or string")
+        if report_timestamp is not None and not isinstance(report_timestamp, str):
+            raise ValueError("report_timestamp must be a string")
+        if future_edits_by_fe is not None and not isinstance(future_edits_by_fe, bool):
+            raise ValueError("future_edits_by_fe must be a boolean")
+
+        payload = {
+            "userProfilePk": user_profile_pk,
+            "todayCalendarDate": today_calendar_date,
+            "startDate": startdate,
+            "endDate": enddate,
+            "reportTimestamp": report_timestamp,
+            "cycleDatesLists": cycle_dates_lists,
+            "futureEditsByFE": future_edits_by_fe,
+        }
+        payload = _clean_optional_payload(payload, keep_empty={"cycleDatesLists"})
+
+        logger.debug(
+            "Updating menstrual calendar dates for %s through %s", startdate, enddate
+        )
+        return self.client.post(
+            "connectapi",
+            self.garmin_connect_menstrual_calendar_updates_url,
+            json=payload,
+            api=True,
+        )
+
+    def init_menstrual_cycle_setup(
+        self,
+        period_start_date: str,
+        period_length: int | str,
+        cycle_length: int | str,
+        *,
+        user_profile_pk: int | str | None = None,
+        report_timestamp: str | None = None,
+    ) -> dict[str, Any]:
+        """Initialize menstrual cycle tracking setup."""
+        period_start_date = _validate_date_format(
+            period_start_date, "period_start_date"
+        )
+        period_length = _validate_positive_integer(int(period_length), "period_length")
+        cycle_length = _validate_positive_integer(int(cycle_length), "cycle_length")
+        if user_profile_pk is not None and not isinstance(user_profile_pk, int | str):
+            raise ValueError("user_profile_pk must be an integer or string")
+        if report_timestamp is not None and not isinstance(report_timestamp, str):
+            raise ValueError("report_timestamp must be a string")
+
+        payload = {
+            "userProfilePk": user_profile_pk,
+            "periodStartDate": period_start_date,
+            "periodLength": period_length,
+            "cycleLength": cycle_length,
+            "reportTimestamp": report_timestamp,
+        }
+        payload = _clean_optional_payload(payload)
+
+        logger.debug("Initializing menstrual cycle setup")
+        return self.client.post(
+            "connectapi",
+            self.garmin_connect_menstrual_init_cycle_setup_url,
+            json=payload,
+            api=True,
+        )
+
+    def confirm_menstrual_period_start(
+        self,
+        period_start_date: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Confirm a menstrual period start date using Garmin's raw payload shape."""
+        period_start_date = _validate_date_format(
+            period_start_date, "period_start_date"
+        )
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a dictionary")
+        payload = {**payload, "periodStartDate": period_start_date}
+
+        url = f"/periodichealth-service/menstrualcycle/{period_start_date}"
+        logger.debug("Confirming menstrual period start date %s", period_start_date)
+        return self.client.post("connectapi", url, json=payload, api=True)
+
+    def update_menstrual_settings(
+        self,
+        settings: dict[str, Any],
+        *,
+        user_settings_id: int | str | None = None,
+    ) -> dict[str, Any]:
+        """Update the user's menstrual cycle tracking settings."""
+        if not isinstance(settings, dict):
+            raise ValueError("settings must be a dictionary")
+        if user_settings_id is not None and not isinstance(user_settings_id, int | str):
+            raise ValueError("user_settings_id must be an integer or string")
+
+        payload: dict[str, Any] = {"userMenstrualCycleSettings": settings}
+        if user_settings_id is not None:
+            payload["id"] = user_settings_id
+
+        logger.debug("Updating menstrual cycle tracking settings")
+        return self.client.put(
+            "connectapi",
+            self.garmin_connect_user_settings_url,
+            json=payload,
+            api=True,
+        )
 
     def get_pregnancy_summary(self) -> dict[str, Any]:
         """Return snapshot of pregnancy data."""
@@ -3151,10 +3351,25 @@ class Garmin:
 
         return self.connectapi(url)
 
-    def get_all_pregnancy_snapshots(self) -> dict[str, Any]:
+    def get_all_pregnancy_snapshots(self) -> dict[str, Any] | list[Any]:
         """Return all pregnancy snapshots."""
         url = f"{self.garmin_connect_pregnancy_snapshot_url}/all"
         logger.debug("Requesting all pregnancy snapshots")
+
+        return self.connectapi(url)
+
+    def get_pregnancy_weight_goals(
+        self, startdate: str, enddate: str
+    ) -> dict[str, Any] | list[Any]:
+        """Return pregnancy weight goals between startdate and enddate."""
+        startdate = _validate_date_format(startdate, "startdate")
+        enddate = _validate_date_format(enddate, "enddate")
+        url = f"{self.garmin_connect_pregnancy_weight_goals_url}/{startdate}/{enddate}"
+        logger.debug(
+            "Requesting pregnancy weight goals for dates %s through %s",
+            startdate,
+            enddate,
+        )
 
         return self.connectapi(url)
 
