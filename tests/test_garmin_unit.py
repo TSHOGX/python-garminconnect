@@ -655,6 +655,29 @@ class TestMenstrualCycleApi:
         )
         assert result == response
 
+    def test_update_menstrual_daily_log_can_clear_scalar_fields(
+        self, garmin: garminconnect.Garmin
+    ):
+        with patch.object(garmin.client, "post", return_value={}) as mock:
+            garmin.update_menstrual_daily_log(
+                "2026-05-15",
+                flow="",
+                sex_drive="",
+                sexual_activity="",
+            )
+
+        mock.assert_called_once_with(
+            "connectapi",
+            "/periodichealth-service/menstrualcycle/dailylog/2026-05-15",
+            json={
+                "calendarDate": "2026-05-15",
+                "flow": "",
+                "sexDrive": "",
+                "sexualActivity": "",
+            },
+            api=True,
+        )
+
     def test_update_menstrual_daily_log_accepts_profile_metadata(
         self, garmin: garminconnect.Garmin
     ):

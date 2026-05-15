@@ -173,6 +173,15 @@ def _validate_optional_enum(
     return value
 
 
+def _validate_optional_clearable_enum(
+    value: str | None, valid_values: set[str], param_name: str
+) -> str | None:
+    """Validate an optional Garmin enum value that uses empty string to clear."""
+    if value == "":
+        return ""
+    return _validate_optional_enum(value, valid_values, param_name)
+
+
 def _validate_optional_enum_list(
     values: list[str] | None, valid_values: set[str], param_name: str
 ) -> list[str] | None:
@@ -3172,7 +3181,7 @@ class Garmin:
             symptoms, VALID_MENSTRUAL_SYMPTOMS, "symptoms"
         )
         moods = _validate_optional_enum_list(moods, VALID_MENSTRUAL_MOODS, "moods")
-        flow = _validate_optional_enum(flow, VALID_MENSTRUAL_FLOW, "flow")
+        flow = _validate_optional_clearable_enum(flow, VALID_MENSTRUAL_FLOW, "flow")
         discharge = _validate_optional_enum_list(
             discharge, VALID_MENSTRUAL_DISCHARGE, "discharge"
         )
@@ -3180,10 +3189,10 @@ class Garmin:
             raise ValueError(
                 "NO_DISCHARGE cannot be combined with other discharge values"
             )
-        sex_drive = _validate_optional_enum(
+        sex_drive = _validate_optional_clearable_enum(
             sex_drive, VALID_MENSTRUAL_SEX_DRIVE, "sex_drive"
         )
-        sexual_activity = _validate_optional_enum(
+        sexual_activity = _validate_optional_clearable_enum(
             sexual_activity, VALID_MENSTRUAL_SEXUAL_ACTIVITY, "sexual_activity"
         )
         if notes is not None and not isinstance(notes, str):
