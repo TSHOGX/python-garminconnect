@@ -37,6 +37,65 @@ MAX_HYDRATION_ML = 10000  # 10 liters
 DATE_FORMAT_REGEX = r"^\d{4}-\d{2}-\d{2}$"
 DATE_FORMAT_STR = "%Y-%m-%d"
 VALID_WEIGHT_UNITS = {"kg", "lbs"}
+VALID_MENSTRUAL_FLOW = {"LIGHT", "MEDIUM", "HEAVY"}
+VALID_MENSTRUAL_SYMPTOMS = {
+    "ACNE",
+    "BACKACHE",
+    "BLOATING",
+    "BODY_ACHES",
+    "CHILLS",
+    "CONSTIPATION",
+    "CONTRACTIONS",
+    "CRAMPS",
+    "CRAVINGS",
+    "DIARRHEA",
+    "DISTRACTED",
+    "DIZZINESS",
+    "DRY_SKIN",
+    "FATIGUE",
+    "FREQUENT_URINATION",
+    "HAIR_LOSS",
+    "HEADACHE",
+    "HEARTBURN",
+    "HOT_FLASHES",
+    "INSOMNIA",
+    "NAUSEA",
+    "NIGHT_SWEATS",
+    "ROUND_LIGAMENT_PAIN",
+    "SWELLING",
+    "TENDER_BREASTS",
+    "TROUBLE_BREATHING",
+    "URINE_LEAKAGE",
+    "VAGINAL_DRYNESS",
+    "VOMITING",
+    "WEIGHT_GAIN",
+}
+VALID_MENSTRUAL_MOODS = {
+    "ENERGETIC",
+    "EMOTIONAL",
+    "FINE",
+    "FRUSTRATED",
+    "HAPPY",
+    "IRRITABLE",
+    "MOOD_SWINGS",
+    "MOTIVATED",
+    "OVERWHELMED",
+    "SAD",
+    "WORRIED",
+}
+VALID_MENSTRUAL_DISCHARGE = {
+    "CREAMY",
+    "EGG_WHITE",
+    "HEAVY",
+    "LIGHT",
+    "MEDIUM",
+    "NO_DISCHARGE",
+    "SPOTTING",
+    "STICKY",
+    "UNUSUAL",
+}
+VALID_MENSTRUAL_SEX_DRIVE = {"AVERAGE", "HIGH", "LOW"}
+VALID_MENSTRUAL_SEXUAL_ACTIVITY = {"PROTECTED", "UNPROTECTED"}
 
 
 # Add validation utilities
@@ -96,6 +155,38 @@ def _validate_positive_integer(value: int, param_name: str = "value") -> int:
     if value <= 0:
         raise ValueError(f"{param_name} must be a positive integer, got: {value}")
     return value
+
+
+def _validate_optional_enum(
+    value: str | None, valid_values: set[str], param_name: str
+) -> str | None:
+    """Validate an optional Garmin enum value."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{param_name} must be a string")
+    value = value.strip().upper()
+    if value not in valid_values:
+        raise ValueError(
+            f"{param_name} must be one of {sorted(valid_values)}, got: {value}"
+        )
+    return value
+
+
+def _validate_optional_enum_list(
+    values: list[str] | None, valid_values: set[str], param_name: str
+) -> list[str] | None:
+    """Validate an optional list of Garmin enum values."""
+    if values is None:
+        return None
+    if not isinstance(values, list):
+        raise ValueError(f"{param_name} must be a list")
+    result = []
+    for value in values:
+        validated = _validate_optional_enum(value, valid_values, param_name)
+        if validated is not None:
+            result.append(validated)
+    return result
 
 
 def _fmt_ts(dt: datetime) -> str:
@@ -408,6 +499,12 @@ class Garmin:
 
         self.garmin_connect_menstrual_dayview_url = (
             "/periodichealth-service/menstrualcycle/dayview"
+        )
+        self.garmin_connect_menstrual_dailylog_url = (
+            "/periodichealth-service/menstrualcycle/dailylog"
+        )
+        self.garmin_connect_menstrual_reports_url = (
+            "/periodichealth-service/reports/menstrualcycle"
         )
         self.garmin_connect_pregnancy_snapshot_url = (
             "/periodichealth-service/menstrualcycle/pregnancysnapshot"
@@ -2944,10 +3041,120 @@ class Garmin:
 
         return self.connectapi(url)
 
+    def get_menstrual_reports(
+        self,
+        number_of_cycles: int | str,
+        date: str,
+        next_report: bool = False,
+        report_type: str = "CYCLE",
+        today_calendar_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Return menstrual cycle reports around a date."""
+        number_of_cycles = _validate_positive_integer(
+            int(number_of_cycles), "number_of_cycles"
+        )
+        date = _validate_date_format(date, "date")
+        if not isinstance(next_report, bool):
+            raise ValueError("next_report must be a boolean")
+        if not isinstance(report_type, str) or not report_type.strip():
+            raise ValueError("report_type must be a non-empty string")
+        params = {
+            "next": str(next_report).lower(),
+            "reportType": report_type.strip().upper(),
+        }
+        if today_calendar_date is not None:
+            params["todayCalendarDate"] = _validate_date_format(
+                today_calendar_date, "today_calendar_date"
+            )
+
+        url = f"{self.garmin_connect_menstrual_reports_url}/{number_of_cycles}/{date}"
+        logger.debug(
+            "Requesting menstrual reports for %d cycles around %s",
+            number_of_cycles,
+            date,
+        )
+
+        return self.connectapi(url, params=params)
+
+    def update_menstrual_daily_log(
+        self,
+        calendar_date: str,
+        *,
+        symptoms: list[str] | None = None,
+        moods: list[str] | None = None,
+        flow: str | None = None,
+        discharge: list[str] | None = None,
+        sex_drive: str | None = None,
+        sexual_activity: str | None = None,
+        notes: str | None = None,
+        ovulation_day: bool | None = None,
+        user_profile_pk: int | str | None = None,
+        report_timestamp: str | None = None,
+    ) -> dict[str, Any]:
+        """Update menstrual daily log data for a calendar date."""
+        calendar_date = _validate_date_format(calendar_date, "calendar_date")
+        symptoms = _validate_optional_enum_list(
+            symptoms, VALID_MENSTRUAL_SYMPTOMS, "symptoms"
+        )
+        moods = _validate_optional_enum_list(moods, VALID_MENSTRUAL_MOODS, "moods")
+        flow = _validate_optional_enum(flow, VALID_MENSTRUAL_FLOW, "flow")
+        discharge = _validate_optional_enum_list(
+            discharge, VALID_MENSTRUAL_DISCHARGE, "discharge"
+        )
+        if discharge and "NO_DISCHARGE" in discharge and len(discharge) > 1:
+            raise ValueError(
+                "NO_DISCHARGE cannot be combined with other discharge values"
+            )
+        sex_drive = _validate_optional_enum(
+            sex_drive, VALID_MENSTRUAL_SEX_DRIVE, "sex_drive"
+        )
+        sexual_activity = _validate_optional_enum(
+            sexual_activity, VALID_MENSTRUAL_SEXUAL_ACTIVITY, "sexual_activity"
+        )
+        if notes is not None and not isinstance(notes, str):
+            raise ValueError("notes must be a string")
+        if ovulation_day is not None and not isinstance(ovulation_day, bool):
+            raise ValueError("ovulation_day must be a boolean")
+        if user_profile_pk is not None and not isinstance(user_profile_pk, int | str):
+            raise ValueError("user_profile_pk must be an integer or string")
+        if report_timestamp is not None and not isinstance(report_timestamp, str):
+            raise ValueError("report_timestamp must be a string")
+
+        payload = {
+            "calendarDate": calendar_date,
+            "symptoms": symptoms,
+            "moods": moods,
+            "flow": flow,
+            "discharge": discharge,
+            "sexDrive": sex_drive,
+            "sexualActivity": sexual_activity,
+            "notes": notes,
+            "ovulationDay": ovulation_day,
+            "userProfilePk": user_profile_pk,
+            "reportTimestamp": report_timestamp,
+        }
+        payload = {
+            key: value
+            for key, value in payload.items()
+            if value is not None and (key == "notes" or value != [])
+        }
+
+        url = f"{self.garmin_connect_menstrual_dailylog_url}/{calendar_date}"
+        logger.debug("Updating menstrual daily log for %s", calendar_date)
+
+        return self.client.post("connectapi", url, json=payload, api=True)
+
     def get_pregnancy_summary(self) -> dict[str, Any]:
         """Return snapshot of pregnancy data."""
         url = f"{self.garmin_connect_pregnancy_snapshot_url}"
         logger.debug("Requesting pregnancy snapshot data")
+
+        return self.connectapi(url)
+
+    def get_all_pregnancy_snapshots(self) -> dict[str, Any]:
+        """Return all pregnancy snapshots."""
+        url = f"{self.garmin_connect_pregnancy_snapshot_url}/all"
+        logger.debug("Requesting all pregnancy snapshots")
 
         return self.connectapi(url)
 

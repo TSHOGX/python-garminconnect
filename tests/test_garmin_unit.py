@@ -16,12 +16,12 @@ Run with:
     python -m pytest tests/test_garmin_unit.py -v
 """
 
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 
 import garminconnect
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -452,24 +452,26 @@ class TestResponseHandling:
     def test_get_user_summary_raises_when_response_empty(
         self, garmin: garminconnect.Garmin
     ):
-        with patch.object(garmin, "connectapi", return_value=None):
-            with pytest.raises(
+        with (
+            patch.object(garmin, "connectapi", return_value=None),
+            pytest.raises(
                 garminconnect.GarminConnectConnectionError,
                 match="No data received",
-            ):
-                garmin.get_user_summary("2026-03-15")
+            ),
+        ):
+            garmin.get_user_summary("2026-03-15")
 
     def test_get_user_summary_raises_on_privacy_protected(
         self, garmin: garminconnect.Garmin
     ):
-        with patch.object(
-            garmin, "connectapi", return_value={"privacyProtected": True}
-        ):
-            with pytest.raises(
+        with (
+            patch.object(garmin, "connectapi", return_value={"privacyProtected": True}),
+            pytest.raises(
                 garminconnect.GarminConnectAuthenticationError,
                 match="Authentication error",
-            ):
-                garmin.get_user_summary("2026-03-15")
+            ),
+        ):
+            garmin.get_user_summary("2026-03-15")
 
     def test_get_body_composition_single_day_uses_start_as_end(
         self, garmin: garminconnect.Garmin
@@ -514,3 +516,137 @@ class TestResponseHandling:
         assert last_params["start"] == "40"
         assert last_params["startDate"] == "2026-03-01"
         assert last_params["endDate"] == "2026-03-31"
+
+
+# ---------------------------------------------------------------------------
+# Menstrual cycle API tests
+# ---------------------------------------------------------------------------
+
+
+class TestMenstrualCycleApi:
+    """Verify menstrual-cycle endpoint wrappers and write payloads."""
+
+    def test_get_menstrual_reports_builds_url_and_params(
+        self, garmin: garminconnect.Garmin
+    ):
+        payload: dict[str, Any] = {"cycleSummaries": []}
+        with patch.object(garmin, "connectapi", return_value=payload) as mock:
+            result = garmin.get_menstrual_reports(
+                12,
+                "2026-05-15",
+                next_report=True,
+                today_calendar_date="2026-05-15",
+            )
+
+        mock.assert_called_once()
+        url = mock.call_args[0][0]
+        params = mock.call_args.kwargs["params"]
+        assert url.endswith(
+            "/periodichealth-service/reports/menstrualcycle/12/2026-05-15"
+        )
+        assert params == {
+            "next": "true",
+            "reportType": "CYCLE",
+            "todayCalendarDate": "2026-05-15",
+        }
+        assert result == payload
+
+    def test_get_menstrual_reports_omits_today_calendar_date(
+        self, garmin: garminconnect.Garmin
+    ):
+        with patch.object(garmin, "connectapi", return_value={}) as mock:
+            garmin.get_menstrual_reports("6", "2026-05-15")
+
+        params = mock.call_args.kwargs["params"]
+        assert params == {"next": "false", "reportType": "CYCLE"}
+
+    def test_get_all_pregnancy_snapshots_builds_url(
+        self, garmin: garminconnect.Garmin
+    ):
+        payload: dict[str, Any] = {"snapshots": []}
+        with patch.object(garmin, "connectapi", return_value=payload) as mock:
+            result = garmin.get_all_pregnancy_snapshots()
+
+        mock.assert_called_once_with(
+            "/periodichealth-service/menstrualcycle/pregnancysnapshot/all"
+        )
+        assert result == payload
+
+    def test_update_menstrual_daily_log_posts_clean_payload(
+        self, garmin: garminconnect.Garmin
+    ):
+        response = {"dayLog": {"calendarDate": "2026-05-15"}}
+        with patch.object(garmin.client, "post", return_value=response) as mock:
+            result = garmin.update_menstrual_daily_log(
+                "2026-05-15",
+                symptoms=["cramps"],
+                moods=[],
+                flow="medium",
+                discharge=[],
+                sex_drive="average",
+                sexual_activity="protected",
+                notes="",
+                ovulation_day=False,
+            )
+
+        mock.assert_called_once_with(
+            "connectapi",
+            "/periodichealth-service/menstrualcycle/dailylog/2026-05-15",
+            json={
+                "calendarDate": "2026-05-15",
+                "symptoms": ["CRAMPS"],
+                "flow": "MEDIUM",
+                "sexDrive": "AVERAGE",
+                "sexualActivity": "PROTECTED",
+                "notes": "",
+                "ovulationDay": False,
+            },
+            api=True,
+        )
+        assert result == response
+
+    def test_update_menstrual_daily_log_accepts_profile_metadata(
+        self, garmin: garminconnect.Garmin
+    ):
+        with patch.object(garmin.client, "post", return_value={}) as mock:
+            garmin.update_menstrual_daily_log(
+                "2026-05-15",
+                user_profile_pk=12345,
+                report_timestamp="2026-05-15T02:00:00.000",
+            )
+
+        payload = mock.call_args.kwargs["json"]
+        assert payload["userProfilePk"] == 12345
+        assert payload["reportTimestamp"] == "2026-05-15T02:00:00.000"
+
+    def test_update_menstrual_daily_log_rejects_invalid_date(
+        self, garmin: garminconnect.Garmin
+    ):
+        with pytest.raises(ValueError, match="invalid calendar_date"):
+            garmin.update_menstrual_daily_log("2026-02-30")
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"flow": "SPOTTING"}, "flow must be one of"),
+            ({"symptoms": ["BOGUS"]}, "symptoms must be one of"),
+            ({"moods": ["BOGUS"]}, "moods must be one of"),
+            ({"discharge": ["BOGUS"]}, "discharge must be one of"),
+            ({"sex_drive": "BOGUS"}, "sex_drive must be one of"),
+            ({"sexual_activity": "BOGUS"}, "sexual_activity must be one of"),
+            ({"ovulation_day": "yes"}, "ovulation_day must be a boolean"),
+        ],
+    )
+    def test_update_menstrual_daily_log_rejects_invalid_values(
+        self, garmin: garminconnect.Garmin, kwargs: dict[str, Any], message: str
+    ):
+        with pytest.raises(ValueError, match=message):
+            garmin.update_menstrual_daily_log("2026-05-15", **kwargs)
+
+    def test_update_menstrual_daily_log_rejects_conflicting_discharge(
+        self, garmin: garminconnect.Garmin
+    ):
+        with pytest.raises(ValueError, match="NO_DISCHARGE cannot be combined"):
+            garmin.update_menstrual_daily_log(
+                "2026-05-15", discharge=["NO_DISCHARGE", "LIGHT"]
+            )
